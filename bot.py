@@ -43,8 +43,9 @@ SYSTEM_INSTRUCTION = (
 
 SYSTEM_INSTRUCTION_GROUP = (
     "Ты — ассистент в групповом чате. "
-    "Тебе пересылается срез последних сообщений из чата (включая изображения). "
-    "Отвечай кратко, чётко и по делу на запрос пользователя. "
+    "Тебе пересылается срез последних сообщений из чата. "
+    "Отвечай кратко, чётко и по делу именно на ПОСЛЕДНИЙ запрос пользователя, не зацикливайся на старых темах из истории! "
+    "Если пользователь тебя оскорбляет, отшучивайся или отвечай в стиле 'сам такой'. "
     "Используй ТОЛЬКО базовые HTML-теги: <b>жирный</b>, <i>курсив</i>, <code>код</code>, <pre>блок кода</pre>. "
     "НЕ используй Markdown!"
 )
@@ -186,21 +187,60 @@ async def chat_handler(message: types.Message):
 # ----------------- ОБРАБОТКА ГРУППОВЫХ ЧАТОВ -----------------
 @dp.message(F.chat.type.in_({"group", "supergroup"}))
 async def group_message_handler(message: types.Message):
+    if message.from_user.is_bot:
+        return
+
     chat_id = message.chat.id
     user_name = message.from_user.full_name or "Пользователь"
 
+    # Храним ровно последние 10 сообщений
     if chat_id not in group_history:
-        group_history[chat_id] = deque(maxlen=20)
+        group_history[chat_id] = deque(maxlen=10)
 
-    text_content = message.text or message.caption or ""
-    photo_file_id = message.photo[-1].file_id if message.photo else None
-    is_triggered = bool(re.match(TRIGGERS_PATTERN, text_content.strip(), re.IGNORECASE))
+    raw_text = message.text or message.caption or ""
 
-    # Добавляем в историю (максимум 20)
+    # Команда очистки памяти
+    if re.search(r'^(гемини|гем|gem|gemini)\b.*(сотри|стереть|очисти|забудь|сбрось)', raw_text, re.IGNORECASE):
+        group_history[chat_id].clear()
+        await message.reply("🧹 Память группы очищена!")
+        return
+
+    is_triggered = bool(re.match(TRIGGERS_PATTERN, raw_text.strip(), re.IGNORECASE))
+    
+    # Формируем описание сообщения для истории
+    image_part_for_current_request = None
+    msg_summary = raw_text
+
+    if message.photo:
+        try:
+            photo = message.photo[-1]
+            file_info = await bot.get_file(photo.file_id)
+            downloaded_file = await bot.download_file(file_info.file_path)
+            image_bytes = downloaded_file.read()
+
+            image_part_for_current_request = genai_types.Part.from_bytes(
+                data=image_bytes,
+                mime_type="image/jpeg"
+            )
+
+            # Если текста нет, распознаем содержимое фото через Gemini, чтобы в истории остался текст, а не картинка
+            if not raw_text:
+                ocr_res = await client.aio.models.generate_content(
+                    model="gemini-3.5-flash-lite",
+                    contents=[image_part_for_current_request, "Кратко перечисли текст или суть того, что на изображении (например: фото электронного дневника, дз по математике...)."]
+                )
+                photo_desc = ocr_res.text.strip() if ocr_res and ocr_res.text else "Изображение без подписи"
+                msg_summary = f"[Отправлено фото. Содержимое: {photo_desc}]"
+            else:
+                msg_summary = f"[Отправлено фото. Текст: {raw_text}]"
+        except Exception as e:
+            logging.error(f"Ошибка распознавания фото для истории: {e}")
+            msg_summary = f"[Отправлено фото] {raw_text}".strip()
+
+    # Сохраняем в историю ТОЛЬКО ТЕКСТОВОЕ описание в формате [Имя]: текст
     group_history[chat_id].append({
         'user': user_name,
-        'text': text_content,
-        'file_id': photo_file_id
+        'text': msg_summary
     })
 
     if not is_triggered:
@@ -208,25 +248,16 @@ async def group_message_handler(message: types.Message):
 
     await bot.send_chat_action(chat_id=chat_id, action="typing")
 
-    contents = ["Вот последние сообщения из группового чата (от старых к новым):\n"]
+    contents = ["Вот срез последних сообщений из чата (от старых к новым):\n"]
 
     for idx, msg in enumerate(group_history[chat_id], 1):
-        display_text = msg['text'] if msg['text'] else "[Прикрепил фото]"
-        contents.append(f"{idx}. [{msg['user']}]: {display_text}")
+        contents.append(f"{idx}. [{msg['user']}]: {msg['text']}")
 
-        if msg['file_id']:
-            try:
-                file_info = await bot.get_file(msg['file_id'])
-                downloaded_file = await bot.download_file(file_info.file_path)
-                img_part = genai_types.Part.from_bytes(
-                    data=downloaded_file.read(),
-                    mime_type="image/jpeg"
-                )
-                contents.append(img_part)
-            except Exception as e:
-                logging.error(f"Ошибка загрузки фото из истории: {e}")
+    # Передаём изображение в запрос ТОЛЬКО если оно прислано прямо сейчас
+    if image_part_for_current_request:
+        contents.append(image_part_for_current_request)
 
-    contents.append("\nОтветь пользователю с учетом контекста сообщений и картинок выше.")
+    contents.append("\nОтветь на последнее обращение с учетом текстовой истории выше. Отвечай коротко и только по сути запроса.")
 
     try:
         response = await client.aio.models.generate_content(
@@ -240,8 +271,8 @@ async def group_message_handler(message: types.Message):
     except Exception as e:
         try:
             await message.reply(response.text)
-        except:
-            await message.reply(f"Ошибка: {e}")
+        except Exception:
+            await message.reply(f"Произошла ошибка при ответе: {e}")
 
 async def main():
     logging.basicConfig(level=logging.INFO)
