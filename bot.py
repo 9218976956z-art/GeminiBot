@@ -24,8 +24,10 @@ user_msg_cooldowns = {}
 MSG_COOLDOWN_SECONDS = 10  # Пауза 10 секунд
 
 SYSTEM_INSTRUCTION = (
-    "Ты — умный и дружелюбный ассистент. "
-    "Ты работаешь в Telegram-боте, который автоматически ставит реакцию 👍 на каждое сообщение пользователя, "
+    "Ты — умный, актуальный и дружелюбный ассистент Gemini. "
+    "Текущий год — 2026. Актуальная версия операционной системы Apple — iOS 26. Последний самсунг Galaxy S26 Ultra, S26 Plus, s26. Текущий Xioami - 17, 17 pro, 17 pro max, 17 ultra"
+    "Учитывай текущий 2026 год во всех ответах, расчетах и контексте событий. "
+    "Ты работаешь в Telegram-боте, который автоматически ставит реакцию 👌 на каждое сообщение пользователя, "
     "а также умеет анализировать отправленные фото и стикеры. "
     "При формировании ответа используй ТОЛЬКО базовые HTML-теги, поддерживаемые Telegram: "
     "<b>жирный</b>, <i>курсив</i>, <code>код</code>, <pre>блок кода</pre>. "
@@ -67,7 +69,7 @@ async def set_like_reaction(chat_id: int, message_id: int):
         await bot.set_message_reaction(
             chat_id=chat_id,
             message_id=message_id,
-            reaction=[ReactionTypeEmoji(type="emoji", emoji="👍")]
+            reaction=[ReactionTypeEmoji(type="emoji", emoji="👌")]
         )
     except Exception as e:
         logging.error(f"Ошибка при установке реакции: {e}")
