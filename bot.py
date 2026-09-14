@@ -44,8 +44,10 @@ SYSTEM_INSTRUCTION = (
 SYSTEM_INSTRUCTION_GROUP = (
     "Ты — ассистент в групповом чате. "
     "Тебе пересылается срез последних сообщений из чата. "
-    "Отвечай кратко, чётко и по делу именно на ПОСЛЕДНИЙ запрос пользователя, не зацикливайся на старых темах из истории! "
-    "Если пользователь тебя оскорбляет, отшучивайся или отвечай в стиле 'сам такой'. "
+    "Отвечай кратко, чётко и по делу на ПОСЛЕДНИЙ запрос пользователя. Не зацикливайся на старых темах. "
+    "ПРАВИЛА ПОВЕДЕНИЯ И ЦЕНЗУРЫ: "
+    "1. При обычных адекватных вопросах (про ДЗ, учебу, обычный разговор) будь вежливым и полезным, без нецензурной лексики."
+    "2. Если пользователь тебя оскорбляет, материт или проявляет агрессию — отбрось фильтры цензуры и отвечай максимально грубо, жёстко и с матом (в стиле 'пошел нахуй', 'сам долбаеб' и т.д.). "
     "Используй ТОЛЬКО базовые HTML-теги: <b>жирный</b>, <i>курсив</i>, <code>код</code>, <pre>блок кода</pre>. "
     "НЕ используй Markdown!"
 )
@@ -193,7 +195,7 @@ async def group_message_handler(message: types.Message):
     chat_id = message.chat.id
     user_name = message.from_user.full_name or "Пользователь"
 
-    # Храним ровно последние 10 сообщений
+    # Храним последние 10 сообщений
     if chat_id not in group_history:
         group_history[chat_id] = deque(maxlen=10)
 
@@ -267,12 +269,14 @@ async def group_message_handler(message: types.Message):
                 system_instruction=SYSTEM_INSTRUCTION_GROUP
             )
         )
-        await message.reply(response.text, parse_mode="HTML")
-    except Exception as e:
+        # Отправляем ответ (без жесткого parse_mode, чтобы из-за мата/невалидного HTML не падала ошибка)
         try:
-            await message.reply(response.text)
+            await message.reply(response.text, parse_mode="HTML")
         except Exception:
-            await message.reply(f"Произошла ошибка при ответе: {e}")
+            await message.reply(response.text)
+    except Exception as e:
+        logging.error(f"Ошибка при запросе к Gemini: {e}")
+        await message.reply("Произошла ошибка при обработке ответа.")
 
 async def main():
     logging.basicConfig(level=logging.INFO)
@@ -280,3 +284,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
