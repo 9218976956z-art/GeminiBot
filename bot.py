@@ -28,7 +28,7 @@ dp = Dispatcher()
 # --- ЛИЧНЫЕ СООБЩЕНИЯ (ЛС) ---
 user_chats = {}
 user_msg_cooldowns = {}
-MSG_COOLDOWN_SECONDS = 10  # Пауза 10 секунд
+MSG_COOLDOWN_SECONDS = 10
 
 # --- ГРУППЫ ---
 group_history = {}
@@ -51,9 +51,9 @@ SYSTEM_INSTRUCTION_GROUP = (
     "Отвечай кратко, чётко и по делу на ПОСЛЕДНИЙ запрос пользователя. Не зацикливайся на старых темах. "
     "ПРАВИЛА ОФОРМЛЕНИЯ ТАБЛИЦ: "
     "Если пользователь просит составить таблицу (расписание, ДЗ, список предметов, сравнительную таблицу и т.д.), "
-    "выводи её СТРОГО в виде JSON-массива списков. "
-    "Пример формата: [ [\"Заголовок1\", \"Заголовок2\"], [\"Данные1\", \"Данные2\"] ]. "
-    "Не пиши никакого вводного или заключительного текста, ТОЛЬКО чистый JSON! "
+    "выводи её СТРОГО в виде массива JSON (array of arrays). "
+    "Пример: [[\"Заголовок1\", \"Заголовок2\"], [\"Данные1\", \"Данные2\"]]. "
+    "НЕ ИСПОЛЬЗУЙ Markdown и разметку типа ```json! "
     "ПРАВИЛА ПОВЕДЕНИЯ И ЦЕНЗУРЫ: "
     "1. При обычных адекватных вопросах будь вежливым и полезным. "
     "2. Если пользователь тебя оскорбляет или материт — отвечай максимально грубо, жёстко и с матом. "
@@ -66,7 +66,7 @@ def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
     padding = 12
     font_size = 16
     line_height = 20
-    max_col_width = 280  # Максимальная ширина колонки в пикселях
+    max_col_width = 280
 
     try:
         font = ImageFont.truetype("arial.ttf", font_size)
@@ -77,17 +77,15 @@ def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
     if cols == 0:
         raise ValueError("Таблица пуста")
 
-    # Форматируем текст и оборачиваем длинные строки
     formatted_data = []
     for row in data:
         formatted_row = []
         for cell in row:
             text = str(cell).replace('\r', '').strip()
-            # Разбиваем по явным \n, затем оборачиваем длинные фразы
             sublines = text.split('\n')
             wrapped_lines = []
             for subline in sublines:
-                wrapped = textwrap.wrap(subline, width=28)
+                wrapped = textwrap.wrap(subline, width=26)
                 if wrapped:
                     wrapped_lines.extend(wrapped)
                 else:
@@ -95,7 +93,6 @@ def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
             formatted_row.append("\n".join(wrapped_lines))
         formatted_data.append(formatted_row)
 
-    # Вычисляем ширину каждой колонки
     col_widths = [0] * cols
     for row in formatted_data:
         for idx, cell in enumerate(row):
@@ -108,7 +105,6 @@ def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
                     max_line_w = w
             col_widths[idx] = max(col_widths[idx], min(max_line_w + padding * 2, max_col_width))
 
-    # Вычисляем высоту каждой строки
     row_heights = []
     for row in formatted_data:
         max_lines = 1
@@ -128,19 +124,14 @@ def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
     for r_idx, row in enumerate(formatted_data):
         x = 0
         current_h = row_heights[r_idx]
-
-        # Шапка — синяя, строки — чередующийся серый
         bg_color = (45, 85, 155) if r_idx == 0 else ((42, 42, 42) if r_idx % 2 == 0 else (32, 32, 32))
+
         draw.rectangle([0, y, img_width, y + current_h], fill=bg_color)
 
         for c_idx in range(cols):
             cell_text = row[c_idx] if c_idx < len(row) else ""
             w = col_widths[c_idx]
-
-            # Отрисовка сетки
             draw.rectangle([x, y, x + w, y + current_h], outline=(70, 70, 70), width=1)
-
-            # Отрисовка текста внутри ячейки
             draw.text((x + padding, y + padding), cell_text, fill=(240, 240, 240), font=font)
             x += w
         y += current_h
@@ -353,22 +344,32 @@ async def group_message_handler(message: types.Message):
 
     contents.append("\nОтветь на последнее обращение с учетом текстовой истории выше.")
 
+    # Проверяем, просит ли пользователь именно таблицу
+    is_table_request = any(w in raw_text.lower() for w in ["таблиц", "таблицу", "расписание", "сравни"])
+
+    config_kwargs = {
+        "system_instruction": SYSTEM_INSTRUCTION_GROUP
+    }
+    
+    # Принудительно включаем режим JSON в API, если просят таблицу
+    if is_table_request:
+        config_kwargs["response_mime_type"] = "application/json"
+
     try:
         response = await client.aio.models.generate_content(
             model="gemini-3.5-flash-lite",
             contents=contents,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION_GROUP
-            )
+            config=genai_types.GenerateContentConfig(**config_kwargs)
         )
         
         resp_text = response.text.strip()
 
-        # ПРОВЕРКА НА JSON ТАБЛИЦУ В ОТВЕТЕ
-        if "[[" in resp_text and "]]" in resp_text:
+        # Если делали запрос на таблицу или в ответе пришли скобки JSON
+        if is_table_request or ("[" in resp_text and "]" in resp_text):
             try:
-                start_idx = resp_text.find("[[")
-                end_idx = resp_text.rfind("]]") + 2
+                # Очищаем от любых возможных мусорных символов вокруг массива
+                start_idx = resp_text.find("[")
+                end_idx = resp_text.rfind("]") + 1
                 json_str = resp_text[start_idx:end_idx]
 
                 table_data = json.loads(json_str)
@@ -377,9 +378,9 @@ async def group_message_handler(message: types.Message):
                     await message.reply_photo(photo=photo_file)
                     return
             except Exception as table_err:
-                logging.error(f"Ошибка обработки/отрисовки таблицы: {table_err}")
+                logging.error(f"Ошибка генерации таблицы: {table_err}")
 
-        # ОБЫЧНЫЙ ТЕКСТОВЫЙ ОТВЕТ (Если ответ не таблица или произошел сбой парсинга)
+        # ОБЫЧНЫЙ ТЕКСТОВЫЙ ОТВЕТ
         try:
             await message.reply(resp_text, parse_mode="HTML")
         except Exception:
