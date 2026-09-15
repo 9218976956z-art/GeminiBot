@@ -56,14 +56,14 @@ SYSTEM_INSTRUCTION_GROUP = (
     "Пример: [[\"Заголовок1\", \"Заголовок2\"], [\"Данные1\", \"Данные2\"]]. "
     "НЕ ИСПОЛЬЗУЙ Markdown и разметку типа ```json! "
     "ПРАВИЛА ПОВЕДЕНИЯ И ЦЕНЗУРЫ: "
-    "1. При обычных адекватных вопросах будь вежливым и полезным. "
+    "1. При обычных адекватных вопросах будь вежливым и полезным. Если пользователь просит что то про таблицу/дз/задание из фото (хоть даже с оскорблениями) то ты все равно должен выполнить его просьбу."
     "2. Если пользователь тебя оскорбляет или материт — отвечай максимально грубо, жёстко и с матом. "
     "Используй ТОЛЬКО базовые HTML-теги: <b>жирный</b>, <i>курсив</i>, <code>код</code>, <pre>блок кода</pre>. "
     "НЕ используй Markdown!"
 )
 
-FONT_PATH = "DejaVuSans.ttf"
-FONT_URL = "[https://github.com/dejavu-fonts/dejavu-fonts/raw/main/ttf/DejaVuSans.ttf](https://github.com/dejavu-fonts/dejavu-fonts/raw/main/ttf/DejaVuSans.ttf)"
+FONT_PATH = "DejaVu_ru.ttf"
+FONT_URL = "https://github.com/dejavu-fonts/dejavu-fonts/raw/main/ttf/DejaVuSans.ttf"
 
 def ensure_font_exists():
     """Скачивает шрифт DejaVuSans.ttf с поддержкой кириллицы, если его нет"""
