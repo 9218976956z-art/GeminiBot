@@ -656,46 +656,65 @@ async def group_message_handler(message: types.Message):
 
         resp_text = response.text.strip()
 
-        if is_table_request or (
-            "[" in resp_text and "]" in resp_text
-        ):
-            try:
-                start_idx = resp_text.find("[")
-                end_idx = resp_text.rfind("]") + 1
+        if is_table_request or ("[" in resp_text and "]" in resp_text):
+    try:
+        start_idx = resp_text.find("[")
+        end_idx = resp_text.rfind("]") + 1
 
-                json_str = resp_text[
-                    start_idx:end_idx
-                ]
+        json_str = resp_text[start_idx:end_idx]
 
-                # ==================================================
-                # ЕДИНСТВЕННОЕ НОВОЕ ИЗМЕНЕНИЕ:
-                # очищаем необычные пробелы/символы Gemini
-                # перед json.loads()
-                # ==================================================
-                json_str = json_str.replace("\u00a0", " ")
-                json_str = json_str.replace("\u200b", "")
-                json_str = json_str.strip()
+        # Удаляем BOM
+        json_str = json_str.replace("\ufeff", "")
 
-                table_data = json.loads(json_str)
+        # Удаляем неразрывные пробелы
+        json_str = json_str.replace("\u00a0", " ")
 
-                if (
-                    isinstance(table_data, list)
-                    and len(table_data) > 0
-                ):
-                    photo_file = render_table_to_image(
-                        table_data
-                    )
+        # Удаляем zero-width space
+        json_str = json_str.replace("\u200b", "")
 
-                    await message.reply_photo(
-                        photo=photo_file
-                    )
+        # Удаляем zero-width non-joiner
+        json_str = json_str.replace("\u200c", "")
 
-                    return
+        # Удаляем zero-width joiner
+        json_str = json_str.replace("\u200d", "")
 
-            except Exception as table_err:
-                logging.error(
-                    f"Ошибка генерации таблицы: {table_err}"
-                )
+        # Удаляем word joiner
+        json_str = json_str.replace("\u2060", "")
+
+        json_str = json_str.strip()
+
+        logging.info("========== TABLE DEBUG ==========")
+        logging.info(f"RAW RESPONSE: {repr(resp_text)}")
+        logging.info(f"EXTRACTED JSON: {repr(json_str)}")
+
+        # Пытаемся распарсить JSON
+        table_data = json.loads(json_str)
+
+        logging.info("✅ JSON УСПЕШНО РАСПАРСЕН")
+        logging.info(f"TABLE DATA: {table_data}")
+
+        if isinstance(table_data, list) and len(table_data) > 0:
+
+            logging.info("⏳ Начинаем создание изображения таблицы...")
+
+            photo_file = render_table_to_image(table_data)
+
+            logging.info("✅ Изображение таблицы создано!")
+
+            await message.reply_photo(photo=photo_file)
+
+            logging.info("✅ Таблица отправлена в Telegram!")
+
+            return
+
+    except json.JSONDecodeError as e:
+        logging.error("❌ ОШИБКА JSON")
+        logging.error(f"JSON error: {e}")
+        logging.error(f"Позиция ошибки: {e.pos}")
+        logging.error(f"JSON: {repr(json_str)}")
+
+    except Exception as table_err:
+        logging.exception("❌ ОШИБКА СОЗДАНИЯ ТАБЛИЦЫ")
 
         try:
             await message.reply(
