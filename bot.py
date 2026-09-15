@@ -62,46 +62,103 @@ SYSTEM_INSTRUCTION_GROUP = (
     "НЕ используй Markdown!"
 )
 
+# ============================================================
+# --- ШРИФТ ДЛЯ ТАБЛИЦ ---
+# ============================================================
+
 FONT_PATH = "DejaVu_ru.ttf"
 FONT_URL = "https://github.com/dejavu-fonts/dejavu-fonts/raw/main/ttf/DejaVuSans.ttf"
 
 def ensure_font_exists():
-    """Скачивает шрифт DejaVuSans.ttf с поддержкой кириллицы, если его нет"""
-    if not os.path.exists(FONT_PATH):
-        try:
-            logging.info("⏳ Скачиваем кириллический шрифт DejaVuSans.ttf...")
-            urllib.request.urlretrieve(FONT_URL, FONT_PATH)
-            logging.info("✅ Шрифт успешно скачан!")
-        except Exception as e:
-            logging.error(f"❌ Не удалось скачать шрифт: {e}")
+    """Ищет или скачивает DejaVu Sans с поддержкой кириллицы."""
 
-def get_cyrillic_font(font_size: int):
-    """Возвращает рабочий TTF шрифт"""
-    ensure_font_exists()
-    
-    if os.path.exists(FONT_PATH):
-        try:
-            return ImageFont.truetype(FONT_PATH, font_size)
-        except Exception as e:
-            logging.error(f"Ошибка загрузки шрифта {FONT_PATH}: {e}")
-            
-    # Запасной вариант (системные шрифты Linux/Windows)
-    font_paths = [
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    # Сначала проверяем системные шрифты.
+    system_font_paths = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-        "arial.ttf",
-        "C:\\Windows\\Fonts\\arial.ttf"
+        "C:\\Windows\\Fonts\\DejaVuSans.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
     ]
-    
-    for path in font_paths:
+
+    for path in system_font_paths:
         if os.path.exists(path):
             try:
-                return ImageFont.truetype(path, font_size)
-            except Exception:
-                continue
-            
-    return ImageFont.load_default()
+                ImageFont.truetype(path, 16)
+                logging.info(f"✅ Найден системный шрифт: {path}")
+
+                # Запоминаем найденный системный шрифт.
+                global FONT_PATH
+                FONT_PATH = path
+                return
+            except Exception as e:
+                logging.warning(f"⚠️ Шрифт найден, но не загрузился: {path} — {e}")
+
+    # Если системного шрифта нет — скачиваем DejaVu Sans.
+    if not os.path.exists(FONT_PATH):
+        try:
+            logging.info("⏳ Скачиваем DejaVuSans.ttf с поддержкой кириллицы...")
+            urllib.request.urlretrieve(FONT_URL, FONT_PATH)
+
+            # Проверяем, что Pillow действительно может открыть файл.
+            ImageFont.truetype(FONT_PATH, 16)
+
+            logging.info("✅ Кириллический шрифт успешно скачан!")
+
+        except Exception as e:
+            logging.error(f"❌ Не удалось скачать кириллический шрифт: {e}")
+
+def get_cyrillic_font(font_size: int):
+    """Возвращает TTF-шрифт с поддержкой кириллицы."""
+
+    ensure_font_exists()
+
+    # Пытаемся использовать выбранный шрифт.
+    if os.path.exists(FONT_PATH):
+        try:
+            font = ImageFont.truetype(FONT_PATH, font_size)
+
+            # Проверяем, что шрифт способен отрисовать кириллицу.
+            test_text = "Привет Расписание Математика"
+            font.getbbox(test_text)
+
+            logging.info(f"✅ Используется шрифт: {FONT_PATH}")
+            return font
+
+        except Exception as e:
+            logging.error(f"❌ Ошибка загрузки шрифта {FONT_PATH}: {e}")
+
+    # Последняя попытка — найти любой подходящий системный шрифт.
+    fallback_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "C:\\Windows\\Fonts\\DejaVuSans.ttf",
+    ]
+
+    for path in fallback_paths:
+        if os.path.exists(path):
+            try:
+                font = ImageFont.truetype(path, font_size)
+                logging.info(f"✅ Используется запасной шрифт: {path}")
+                return font
+            except Exception as e:
+                logging.warning(f"⚠️ Не удалось загрузить {path}: {e}")
+
+    # Никакого ImageFont.load_default() здесь нет.
+    # Он часто не содержит кириллицу и превращает русский текст в квадраты.
+    raise RuntimeError(
+        "❌ Не найден шрифт с поддержкой кириллицы. "
+        "Установи DejaVu Sans или FreeSans."
+    )
+
+# ============================================================
+# --- КОНЕЦ БЛОКА ШРИФТА ---
+# ============================================================
+
 
 def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
     """Генерирует аккуратную PNG-картинку из двумерного массива строк"""
@@ -435,4 +492,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
