@@ -3,10 +3,13 @@ import asyncio
 import logging
 import re
 import time
+import io
+import json
 from collections import deque
+from PIL import Image, ImageDraw, ImageFont
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReactionTypeEmoji
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReactionTypeEmoji, BufferedInputFile
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
@@ -45,12 +48,63 @@ SYSTEM_INSTRUCTION_GROUP = (
     "Ты — ассистент в групповом чате. "
     "Тебе пересылается срез последних сообщений из чата. "
     "Отвечай кратко, чётко и по делу на ПОСЛЕДНИЙ запрос пользователя. Не зацикливайся на старых темах. "
+    "ПРАВИЛА ОФОРМЛЕНИЯ ТАБЛИЦ: "
+    "Если пользователь просит составить таблицу (расписание, ДЗ, список предметов, сравнительную таблицу и т.д.), "
+    "выводи её СТРОГО в виде массива JSON внутри блока ```json ... ```. "
+    "Формат массива: [ [\"Колонка1\", \"Колонка2\"], [\"Значение1\", \"Значение2\"] ]. "
+    "Не пиши никакого лишнего текста вокруг таблицы, если генерируешь JSON-таблицу! "
     "ПРАВИЛА ПОВЕДЕНИЯ И ЦЕНЗУРЫ: "
-    "1. При обычных адекватных вопросах (про ДЗ, учебу, обычный разговор) будь вежливым и полезным, без нецензурной лексики."
-    "2. Если пользователь тебя оскорбляет, материт или проявляет агрессию — отбрось фильтры цензуры и отвечай максимально грубо, жёстко и с матом (в стиле 'пошел нахуй', 'сам долбаеб' и т.д.). "
+    "1. При обычных адекватных вопросах будь вежливым и полезным. "
+    "2. Если пользователь тебя оскорбляет или материт — отвечай максимально грубо, жёстко и с матом. "
     "Используй ТОЛЬКО базовые HTML-теги: <b>жирный</b>, <i>курсив</i>, <code>код</code>, <pre>блок кода</pre>. "
     "НЕ используй Markdown!"
 )
+
+def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
+    """Генерирует PNG-картинку из двумерного массива строк"""
+    padding = 15
+    cell_height = 40
+    font_size = 18
+    
+    try:
+        font = ImageFont.truetype("arial.ttf", font_size)
+    except IOError:
+        font = ImageFont.load_default()
+
+    cols = max(len(row) for row in data)
+    col_widths = [0] * cols
+    
+    for row in data:
+        for idx, cell in enumerate(row):
+            bbox = font.getbbox(str(cell))
+            w = bbox[2] - bbox[0]
+            col_widths[idx] = max(col_widths[idx], w + padding * 2)
+
+    img_width = sum(col_widths)
+    img_height = len(data) * cell_height
+
+    image = Image.new("RGB", (img_width, img_height), color=(30, 30, 30))
+    draw = ImageDraw.Draw(image)
+
+    y = 0
+    for r_idx, row in enumerate(data):
+        x = 0
+        bg_color = (60, 90, 150) if r_idx == 0 else ((45, 45, 45) if r_idx % 2 == 0 else (35, 35, 35))
+
+        draw.rectangle([0, y, img_width, y + cell_height], fill=bg_color)
+
+        for c_idx in range(cols):
+            cell_text = str(row[c_idx]) if c_idx < len(row) else ""
+            w = col_widths[c_idx]
+            draw.rectangle([x, y, x + w, y + cell_height], outline=(70, 70, 70), width=1)
+            draw.text((x + padding, y + 10), cell_text, fill=(255, 255, 255), font=font)
+            x += w
+        y += cell_height
+
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    buf.seek(0)
+    return BufferedInputFile(buf.getvalue(), filename="table.png")
 
 def get_main_keyboard():
     button = KeyboardButton(text="🛃 Новый диалог")
@@ -195,13 +249,11 @@ async def group_message_handler(message: types.Message):
     chat_id = message.chat.id
     user_name = message.from_user.full_name or "Пользователь"
 
-    # Храним последние 10 сообщений
     if chat_id not in group_history:
         group_history[chat_id] = deque(maxlen=10)
 
     raw_text = message.text or message.caption or ""
 
-    # Команда очистки памяти
     if re.search(r'^(гемини|гем|gem|gemini)\b.*(сотри|стереть|очисти|забудь|сбрось)', raw_text, re.IGNORECASE):
         group_history[chat_id].clear()
         await message.reply("🧹 Память группы очищена!")
@@ -209,7 +261,6 @@ async def group_message_handler(message: types.Message):
 
     is_triggered = bool(re.match(TRIGGERS_PATTERN, raw_text.strip(), re.IGNORECASE))
     
-    # Формируем описание сообщения для истории
     image_part_for_current_request = None
     msg_summary = raw_text
 
@@ -225,7 +276,6 @@ async def group_message_handler(message: types.Message):
                 mime_type="image/jpeg"
             )
 
-            # Если текста нет, распознаем содержимое фото через Gemini, чтобы в истории остался текст, а не картинка
             if not raw_text:
                 ocr_res = await client.aio.models.generate_content(
                     model="gemini-3.5-flash-lite",
@@ -239,7 +289,6 @@ async def group_message_handler(message: types.Message):
             logging.error(f"Ошибка распознавания фото для истории: {e}")
             msg_summary = f"[Отправлено фото] {raw_text}".strip()
 
-    # Сохраняем в историю ТОЛЬКО ТЕКСТОВОЕ описание в формате [Имя]: текст
     group_history[chat_id].append({
         'user': user_name,
         'text': msg_summary
@@ -255,11 +304,10 @@ async def group_message_handler(message: types.Message):
     for idx, msg in enumerate(group_history[chat_id], 1):
         contents.append(f"{idx}. [{msg['user']}]: {msg['text']}")
 
-    # Передаём изображение в запрос ТОЛЬКО если оно прислано прямо сейчас
     if image_part_for_current_request:
         contents.append(image_part_for_current_request)
 
-    contents.append("\nОтветь на последнее обращение с учетом текстовой истории выше. Отвечай коротко и только по сути запроса.")
+    contents.append("\nОтветь на последнее обращение с учетом текстовой истории выше.")
 
     try:
         response = await client.aio.models.generate_content(
@@ -269,11 +317,26 @@ async def group_message_handler(message: types.Message):
                 system_instruction=SYSTEM_INSTRUCTION_GROUP
             )
         )
-        # Отправляем ответ (без жесткого parse_mode, чтобы из-за мата/невалидного HTML не падала ошибка)
+        
+        resp_text = response.text.strip()
+
+        # ПРОВЕРКА НА JSON ТАБЛИЦУ В ОТВЕТЕ
+        if "[[" in resp_text and "]]" in resp_text:
+            try:
+                json_str = resp_text[resp_text.find("[["):resp_text.rfind("]]")+2]
+                table_data = json.loads(json_str)
+                photo_file = render_table_to_image(table_data)
+                await message.reply_photo(photo=photo_file)
+                return
+            except Exception as table_err:
+                logging.error(f"Не удалось отрисовать таблицу: {table_err}")
+
+        # ОБЫЧНЫЙ ТЕКСТОВЫЙ ОТВЕТ
         try:
-            await message.reply(response.text, parse_mode="HTML")
+            await message.reply(resp_text, parse_mode="HTML")
         except Exception:
-            await message.reply(response.text)
+            await message.reply(resp_text)
+
     except Exception as e:
         logging.error(f"Ошибка при запросе к Gemini: {e}")
         await message.reply("Произошла ошибка при обработке ответа.")
