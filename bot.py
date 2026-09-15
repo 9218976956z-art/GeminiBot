@@ -6,6 +6,7 @@ import time
 import io
 import json
 import textwrap
+import urllib.request
 from collections import deque
 from PIL import Image, ImageDraw, ImageFont
 from aiogram import Bot, Dispatcher, types, F
@@ -61,26 +62,44 @@ SYSTEM_INSTRUCTION_GROUP = (
     "НЕ используй Markdown!"
 )
 
+FONT_PATH = "DejaVuSans.ttf"
+FONT_URL = "[https://github.com/dejavu-fonts/dejavu-fonts/raw/main/ttf/DejaVuSans.ttf](https://github.com/dejavu-fonts/dejavu-fonts/raw/main/ttf/DejaVuSans.ttf)"
+
+def ensure_font_exists():
+    """Скачивает шрифт DejaVuSans.ttf с поддержкой кириллицы, если его нет"""
+    if not os.path.exists(FONT_PATH):
+        try:
+            logging.info("⏳ Скачиваем кириллический шрифт DejaVuSans.ttf...")
+            urllib.request.urlretrieve(FONT_URL, FONT_PATH)
+            logging.info("✅ Шрифт успешно скачан!")
+        except Exception as e:
+            logging.error(f"❌ Не удалось скачать шрифт: {e}")
+
 def get_cyrillic_font(font_size: int):
-    """Подбирает рабочий шрифт с поддержкой кириллицы из доступных в системе"""
+    """Возвращает рабочий TTF шрифт"""
+    ensure_font_exists()
+    
+    if os.path.exists(FONT_PATH):
+        try:
+            return ImageFont.truetype(FONT_PATH, font_size)
+        except Exception as e:
+            logging.error(f"Ошибка загрузки шрифта {FONT_PATH}: {e}")
+            
+    # Запасной вариант (системные шрифты Linux/Windows)
     font_paths = [
-        # Linux пути
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        "DejaVuSans.ttf",
-        # Windows пути
-        "C:\\Windows\\Fonts\\arial.ttf",
-        "C:\\Windows\\Fonts\\calibri.ttf",
-        "arial.ttf"
+        "arial.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf"
     ]
     
     for path in font_paths:
-        try:
-            return ImageFont.truetype(path, font_size)
-        except Exception:
-            continue
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, font_size)
+            except Exception:
+                continue
             
     return ImageFont.load_default()
 
@@ -89,7 +108,7 @@ def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
     padding = 14
     font_size = 16
     line_height = 22
-    max_col_width = 320
+    max_col_width = 340
 
     font = get_cyrillic_font(font_size)
 
@@ -101,7 +120,8 @@ def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
     for row in data:
         formatted_row = []
         for cell in row:
-            text = str(cell).replace('\r', '').strip()
+            # Превращаем символы переноса в нормальные переносы \n
+            text = str(cell).replace('\\n', '\n').replace('\r', '').strip()
             sublines = text.split('\n')
             wrapped_lines = []
             for subline in sublines:
@@ -122,8 +142,8 @@ def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
                 try:
                     bbox = font.getbbox(line)
                     w = bbox[2] - bbox[0]
-                except AttributeError:
-                    w = len(line) * 8
+                except Exception:
+                    w = len(line) * 9
                 if w > max_line_w:
                     max_line_w = w
             col_widths[idx] = max(col_widths[idx], min(max_line_w + padding * 2, max_col_width))
@@ -410,6 +430,7 @@ async def group_message_handler(message: types.Message):
 
 async def main():
     logging.basicConfig(level=logging.INFO)
+    ensure_font_exists()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
