@@ -61,17 +61,37 @@ SYSTEM_INSTRUCTION_GROUP = (
     "НЕ используй Markdown!"
 )
 
+def get_cyrillic_font(font_size: int):
+    """Подбирает рабочий шрифт с поддержкой кириллицы из доступных в системе"""
+    font_paths = [
+        # Linux пути
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "DejaVuSans.ttf",
+        # Windows пути
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "C:\\Windows\\Fonts\\calibri.ttf",
+        "arial.ttf"
+    ]
+    
+    for path in font_paths:
+        try:
+            return ImageFont.truetype(path, font_size)
+        except Exception:
+            continue
+            
+    return ImageFont.load_default()
+
 def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
     """Генерирует аккуратную PNG-картинку из двумерного массива строк"""
-    padding = 12
+    padding = 14
     font_size = 16
-    line_height = 20
-    max_col_width = 280
+    line_height = 22
+    max_col_width = 320
 
-    try:
-        font = ImageFont.truetype("arial.ttf", font_size)
-    except IOError:
-        font = ImageFont.load_default()
+    font = get_cyrillic_font(font_size)
 
     cols = max(len(row) for row in data) if data else 0
     if cols == 0:
@@ -85,7 +105,7 @@ def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
             sublines = text.split('\n')
             wrapped_lines = []
             for subline in sublines:
-                wrapped = textwrap.wrap(subline, width=26)
+                wrapped = textwrap.wrap(subline, width=28)
                 if wrapped:
                     wrapped_lines.extend(wrapped)
                 else:
@@ -99,8 +119,11 @@ def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
             lines = cell.split('\n')
             max_line_w = 0
             for line in lines:
-                bbox = font.getbbox(line)
-                w = bbox[2] - bbox[0]
+                try:
+                    bbox = font.getbbox(line)
+                    w = bbox[2] - bbox[0]
+                except AttributeError:
+                    w = len(line) * 8
                 if w > max_line_w:
                     max_line_w = w
             col_widths[idx] = max(col_widths[idx], min(max_line_w + padding * 2, max_col_width))
@@ -344,14 +367,12 @@ async def group_message_handler(message: types.Message):
 
     contents.append("\nОтветь на последнее обращение с учетом текстовой истории выше.")
 
-    # Проверяем, просит ли пользователь именно таблицу
     is_table_request = any(w in raw_text.lower() for w in ["таблиц", "таблицу", "расписание", "сравни"])
 
     config_kwargs = {
         "system_instruction": SYSTEM_INSTRUCTION_GROUP
     }
     
-    # Принудительно включаем режим JSON в API, если просят таблицу
     if is_table_request:
         config_kwargs["response_mime_type"] = "application/json"
 
@@ -364,10 +385,8 @@ async def group_message_handler(message: types.Message):
         
         resp_text = response.text.strip()
 
-        # Если делали запрос на таблицу или в ответе пришли скобки JSON
         if is_table_request or ("[" in resp_text and "]" in resp_text):
             try:
-                # Очищаем от любых возможных мусорных символов вокруг массива
                 start_idx = resp_text.find("[")
                 end_idx = resp_text.rfind("]") + 1
                 json_str = resp_text[start_idx:end_idx]
@@ -380,7 +399,6 @@ async def group_message_handler(message: types.Message):
             except Exception as table_err:
                 logging.error(f"Ошибка генерации таблицы: {table_err}")
 
-        # ОБЫЧНЫЙ ТЕКСТОВЫЙ ОТВЕТ
         try:
             await message.reply(resp_text, parse_mode="HTML")
         except Exception:
