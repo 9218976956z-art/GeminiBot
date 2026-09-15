@@ -5,6 +5,7 @@ import re
 import time
 import io
 import json
+import textwrap
 from collections import deque
 from PIL import Image, ImageDraw, ImageFont
 from aiogram import Bot, Dispatcher, types, F
@@ -50,9 +51,9 @@ SYSTEM_INSTRUCTION_GROUP = (
     "Отвечай кратко, чётко и по делу на ПОСЛЕДНИЙ запрос пользователя. Не зацикливайся на старых темах. "
     "ПРАВИЛА ОФОРМЛЕНИЯ ТАБЛИЦ: "
     "Если пользователь просит составить таблицу (расписание, ДЗ, список предметов, сравнительную таблицу и т.д.), "
-    "выводи её СТРОГО в виде массива JSON внутри блока ```json ... ```. "
-    "Формат массива: [ [\"Колонка1\", \"Колонка2\"], [\"Значение1\", \"Значение2\"] ]. "
-    "Не пиши никакого лишнего текста вокруг таблицы, если генерируешь JSON-таблицу! "
+    "выводи её СТРОГО в виде JSON-массива списков. "
+    "Пример формата: [ [\"Заголовок1\", \"Заголовок2\"], [\"Данные1\", \"Данные2\"] ]. "
+    "Не пиши никакого вводного или заключительного текста, ТОЛЬКО чистый JSON! "
     "ПРАВИЛА ПОВЕДЕНИЯ И ЦЕНЗУРЫ: "
     "1. При обычных адекватных вопросах будь вежливым и полезным. "
     "2. Если пользователь тебя оскорбляет или материт — отвечай максимально грубо, жёстко и с матом. "
@@ -61,45 +62,88 @@ SYSTEM_INSTRUCTION_GROUP = (
 )
 
 def render_table_to_image(data: list[list[str]]) -> BufferedInputFile:
-    """Генерирует PNG-картинку из двумерного массива строк"""
-    padding = 15
-    cell_height = 40
-    font_size = 18
-    
+    """Генерирует аккуратную PNG-картинку из двумерного массива строк"""
+    padding = 12
+    font_size = 16
+    line_height = 20
+    max_col_width = 280  # Максимальная ширина колонки в пикселях
+
     try:
         font = ImageFont.truetype("arial.ttf", font_size)
     except IOError:
         font = ImageFont.load_default()
 
-    cols = max(len(row) for row in data)
-    col_widths = [0] * cols
-    
+    cols = max(len(row) for row in data) if data else 0
+    if cols == 0:
+        raise ValueError("Таблица пуста")
+
+    # Форматируем текст и оборачиваем длинные строки
+    formatted_data = []
     for row in data:
+        formatted_row = []
+        for cell in row:
+            text = str(cell).replace('\r', '').strip()
+            # Разбиваем по явным \n, затем оборачиваем длинные фразы
+            sublines = text.split('\n')
+            wrapped_lines = []
+            for subline in sublines:
+                wrapped = textwrap.wrap(subline, width=28)
+                if wrapped:
+                    wrapped_lines.extend(wrapped)
+                else:
+                    wrapped_lines.append("")
+            formatted_row.append("\n".join(wrapped_lines))
+        formatted_data.append(formatted_row)
+
+    # Вычисляем ширину каждой колонки
+    col_widths = [0] * cols
+    for row in formatted_data:
         for idx, cell in enumerate(row):
-            bbox = font.getbbox(str(cell))
-            w = bbox[2] - bbox[0]
-            col_widths[idx] = max(col_widths[idx], w + padding * 2)
+            lines = cell.split('\n')
+            max_line_w = 0
+            for line in lines:
+                bbox = font.getbbox(line)
+                w = bbox[2] - bbox[0]
+                if w > max_line_w:
+                    max_line_w = w
+            col_widths[idx] = max(col_widths[idx], min(max_line_w + padding * 2, max_col_width))
+
+    # Вычисляем высоту каждой строки
+    row_heights = []
+    for row in formatted_data:
+        max_lines = 1
+        for cell in row:
+            lines_count = len(cell.split('\n'))
+            if lines_count > max_lines:
+                max_lines = lines_count
+        row_heights.append(max_lines * line_height + padding * 2)
 
     img_width = sum(col_widths)
-    img_height = len(data) * cell_height
+    img_height = sum(row_heights)
 
     image = Image.new("RGB", (img_width, img_height), color=(30, 30, 30))
     draw = ImageDraw.Draw(image)
 
     y = 0
-    for r_idx, row in enumerate(data):
+    for r_idx, row in enumerate(formatted_data):
         x = 0
-        bg_color = (60, 90, 150) if r_idx == 0 else ((45, 45, 45) if r_idx % 2 == 0 else (35, 35, 35))
+        current_h = row_heights[r_idx]
 
-        draw.rectangle([0, y, img_width, y + cell_height], fill=bg_color)
+        # Шапка — синяя, строки — чередующийся серый
+        bg_color = (45, 85, 155) if r_idx == 0 else ((42, 42, 42) if r_idx % 2 == 0 else (32, 32, 32))
+        draw.rectangle([0, y, img_width, y + current_h], fill=bg_color)
 
         for c_idx in range(cols):
-            cell_text = str(row[c_idx]) if c_idx < len(row) else ""
+            cell_text = row[c_idx] if c_idx < len(row) else ""
             w = col_widths[c_idx]
-            draw.rectangle([x, y, x + w, y + cell_height], outline=(70, 70, 70), width=1)
-            draw.text((x + padding, y + 10), cell_text, fill=(255, 255, 255), font=font)
+
+            # Отрисовка сетки
+            draw.rectangle([x, y, x + w, y + current_h], outline=(70, 70, 70), width=1)
+
+            # Отрисовка текста внутри ячейки
+            draw.text((x + padding, y + padding), cell_text, fill=(240, 240, 240), font=font)
             x += w
-        y += cell_height
+        y += current_h
 
     buf = io.BytesIO()
     image.save(buf, format="PNG")
@@ -323,15 +367,19 @@ async def group_message_handler(message: types.Message):
         # ПРОВЕРКА НА JSON ТАБЛИЦУ В ОТВЕТЕ
         if "[[" in resp_text and "]]" in resp_text:
             try:
-                json_str = resp_text[resp_text.find("[["):resp_text.rfind("]]")+2]
-                table_data = json.loads(json_str)
-                photo_file = render_table_to_image(table_data)
-                await message.reply_photo(photo=photo_file)
-                return
-            except Exception as table_err:
-                logging.error(f"Не удалось отрисовать таблицу: {table_err}")
+                start_idx = resp_text.find("[[")
+                end_idx = resp_text.rfind("]]") + 2
+                json_str = resp_text[start_idx:end_idx]
 
-        # ОБЫЧНЫЙ ТЕКСТОВЫЙ ОТВЕТ
+                table_data = json.loads(json_str)
+                if isinstance(table_data, list) and len(table_data) > 0:
+                    photo_file = render_table_to_image(table_data)
+                    await message.reply_photo(photo=photo_file)
+                    return
+            except Exception as table_err:
+                logging.error(f"Ошибка обработки/отрисовки таблицы: {table_err}")
+
+        # ОБЫЧНЫЙ ТЕКСТОВЫЙ ОТВЕТ (Если ответ не таблица или произошел сбой парсинга)
         try:
             await message.reply(resp_text, parse_mode="HTML")
         except Exception:
