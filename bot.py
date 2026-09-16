@@ -7,7 +7,7 @@ import json
 from collections import deque
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReactionTypeEmoji
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReactionTypeEmoji, BufferedInputFile
 from google import genai
 from google.genai import types as genai_types
 from google.genai.errors import APIError
@@ -30,6 +30,7 @@ MSG_COOLDOWN_SECONDS = 10
 # --- ГРУППЫ ---
 group_history = {}
 TRIGGERS_PATTERN = r'^(ии|гемини|гем|gem|gemini)\b'
+GEN_KEYWORDS_PATTERN = r'\b(нарисуй|сгенерируй|создай картинку|нарисуй картинку|сделай фото|сгенерируй фото|сделай картинку)\b'
 
 SYSTEM_INSTRUCTION = (
     "Ты — умный, актуальный и дружелюбный ассистент Gemini. "
@@ -125,6 +126,45 @@ async def reset_chat(message: types.Message):
         parse_mode="HTML"
     )
 
+async def handle_image_generation(message: types.Message, prompt_text: str):
+    status_msg = await message.reply("🎨 Генерация...")
+    await bot.send_chat_action(chat_id=message.chat.id, action="upload_photo")
+
+    try:
+        result = await client.aio.models.generate_images(
+            model='gemini-3.1-flash-lite-image',
+            prompt=prompt_text,
+            config=genai_types.GenerateImagesConfig(
+                number_of_images=1,
+                aspect_ratio="1:1",
+                output_mime_type="image/jpeg"
+            )
+        )
+
+        for generated_image in result.generated_images:
+            image_bytes = generated_image.image.image_bytes
+            photo = BufferedInputFile(image_bytes, filename="generated.jpg")
+            
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+
+            await message.reply_photo(
+                photo=photo,
+                caption=f"🎨 <b>Запрос:</b> {prompt_text}",
+                parse_mode="HTML"
+            )
+            return True
+
+    except Exception as e:
+        logging.error(f"Ошибка генерации картинки: {e}")
+        try:
+            await status_msg.edit_text("❌ Не удалось сгенерировать изображение. Попробуй изменить запрос.")
+        except Exception:
+            await message.reply("❌ Не удалось сгенерировать изображение.")
+        return False
+
 # ----------------- КОМАНДЫ (ТОЛЬКО В ЛС) -----------------
 
 @dp.message(F.chat.type == "private", CommandStart())
@@ -218,6 +258,12 @@ async def chat_handler(message: types.Message):
     await wait_cooldown_if_needed(message)
     await set_like_reaction(message.chat.id, message.message_id)
 
+    raw_text = message.text.strip()
+
+    if re.search(GEN_KEYWORDS_PATTERN, raw_text, re.IGNORECASE):
+        await handle_image_generation(message, raw_text)
+        return
+
     if user_id not in user_chats:
         user_chats[user_id] = create_gemini_chat()
 
@@ -225,7 +271,7 @@ async def chat_handler(message: types.Message):
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
     try:
-        response = await chat.send_message(message.text)
+        response = await chat.send_message(raw_text)
         await message.answer(
             response.text,
             parse_mode="HTML",
@@ -326,6 +372,11 @@ async def group_message_handler(message: types.Message):
     if not is_triggered:
         return
 
+    if re.search(GEN_KEYWORDS_PATTERN, raw_text, re.IGNORECASE):
+        clean_prompt = re.sub(TRIGGERS_PATTERN, '', raw_text, flags=re.IGNORECASE).strip()
+        await handle_image_generation(message, clean_prompt)
+        return
+
     await bot.send_chat_action(chat_id=chat_id, action="typing")
 
     contents = ["Вот контекст последних сообщений из чата (от старых к новым):\n"]
@@ -375,4 +426,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
