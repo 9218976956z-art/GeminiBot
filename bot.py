@@ -34,6 +34,7 @@ GEN_KEYWORDS_PATTERN = r'\b(нарисуй|сгенерируй|создай к�
 
 SYSTEM_INSTRUCTION = (
     "Ты — умный, актуальный и дружелюбный ассистент Gemini. "
+    "Твоя модель — Gemini 2.5 Flash Lite. На прямой вопрос о том, какая ты модель, отвечай честно. Без прямого вопроса не упоминай свою модель. "
     "Текущий год — 2026. Актуальная версия операционной системы Apple — iOS 26. "
     "Последний самсунг Galaxy S26 Ultra, S26 Plus, s26. Текущий Xiaomi - 17, 17 pro, 17 pro max, 17 ultra. "
     "Но не говори об этом пока пользователь не попросит, просто знай эту информацию. "
@@ -48,6 +49,7 @@ SYSTEM_INSTRUCTION = (
 
 SYSTEM_INSTRUCTION_GROUP = (
     "Ты — ассистент в групповом чате. "
+    "Твоя модель — Gemini 2.5 Flash Lite. На прямой вопрос о том, какая ты модель, отвечай честно. Без прямого вопроса не упоминай свою модель. "
     "Тебе пересылается срез последних сообщений из чата. "
     "Отвечай кратко, чётко и по делу на ПОСЛЕДНИЙ запрос пользователя. Не зацикливайся на старых темах. "
     "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО постоянно здороваться и начинать ответы с фраз 'Привет!', 'Всё отлично!', 'Я на связи', если вы уже общаетесь в контексте диалога. "
@@ -72,7 +74,7 @@ def get_main_keyboard():
 
 def create_gemini_chat():
     return client.aio.chats.create(
-        model="gemini-3.5-flash-lite",
+        model="gemini-2.5-flash-lite",
         config=genai_types.GenerateContentConfig(
             system_instruction=SYSTEM_INSTRUCTION
         )
@@ -115,7 +117,7 @@ async def reset_chat(message: types.Message):
     user_chats[user_id] = create_gemini_chat()
 
     welcome_text = (
-        "Привет, я Google Gemini 3.5 Flash Lite!\n\n"
+        "Привет, я Google Gemini 2.5 Flash Lite!\n\n"
         "💬 Отправляй тексты, фото или стикеры "
         "(действует медленный режим: 1 сообщение в 10 секунд)."
     )
@@ -345,7 +347,7 @@ async def group_message_handler(message: types.Message):
 
             if not raw_text:
                 ocr_res = await client.aio.models.generate_content(
-                    model="gemini-3.5-flash-lite",
+                    model="gemini-2.5-flash-lite",
                     contents=[
                         image_part_for_current_request,
                         "Кратко перечисли текст или суть того, что на изображении."
@@ -397,7 +399,7 @@ async def group_message_handler(message: types.Message):
 
     try:
         response = await client.aio.models.generate_content(
-            model="gemini-3.5-flash-lite",
+            model="gemini-2.5-flash-lite",
             contents=contents,
             config=genai_types.GenerateContentConfig(
                 system_instruction=SYSTEM_INSTRUCTION_GROUP
