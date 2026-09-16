@@ -29,7 +29,7 @@ MSG_COOLDOWN_SECONDS = 10
 
 # --- ГРУППЫ ---
 group_history = {}
-TRIGGERS_PATTERN = r'^(ии|гемини|гем|gem|gemini)\b'
+TRIGGERS_PATTERN = r'\b(ии|гемини|гем|gem|gemini)\b'
 GEN_KEYWORDS_PATTERN = r'\b(нарисуй|сгенерируй|создай картинку|нарисуй картинку|сделай фото|сгенерируй фото|сделай картинку)\b'
 
 SYSTEM_INSTRUCTION = (
@@ -360,7 +360,7 @@ async def group_message_handler(message: types.Message):
     raw_text = message.text or message.caption or ""
 
     if re.search(
-        r'^(гемини|гем|gem|gemini)\b.*(сотри|стереть|очисти|забудь|сбрось)',
+        r'\b(гемини|гем|gem|gemini)\b.*(сотри|стереть|очисти|забудь|сбрось)',
         raw_text,
         re.IGNORECASE
     ):
@@ -369,11 +369,9 @@ async def group_message_handler(message: types.Message):
         return
 
     is_triggered = bool(
-        re.match(
-            TRIGGERS_PATTERN,
-            raw_text.strip(),
-            re.IGNORECASE
-        )
+        re.search(TRIGGERS_PATTERN, raw_text.strip(), re.IGNORECASE)
+    ) or (
+        message.reply_to_message and message.reply_to_message.from_user.id == bot.id
     )
 
     image_part_for_current_request = None
@@ -430,17 +428,17 @@ async def group_message_handler(message: types.Message):
                 model="gemini-3.5-flash-lite",
                 contents=[
                     audio_part_for_current_request,
-                    "Расшифруй это аудиосообщение в виде точного текста."
+                    "Расшифруй это аудиосообщение в виде точного текста. Выдай ТОЛЬКО распознанный текст без лишних пояснений."
                 ]
             )
             audio_text = (
                 transcribe_res.text.strip()
                 if transcribe_res and transcribe_res.text
-                else "Не удалось распознать речь"
+                else ""
             )
             msg_summary = f"[Голосовое сообщение: {audio_text}]"
 
-            if not is_triggered and re.match(TRIGGERS_PATTERN, audio_text.strip(), re.IGNORECASE):
+            if re.search(TRIGGERS_PATTERN, audio_text, re.IGNORECASE):
                 is_triggered = True
 
         except Exception as e:
@@ -513,3 +511,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
