@@ -50,6 +50,10 @@ SYSTEM_INSTRUCTION = (
 SYSTEM_INSTRUCTION_GROUP = (
     "Ты — ассистент в групповом чате. "
     "Твоя модель — Gemini 2.5 Flash Lite. На прямой вопрос о том, какая ты модель, отвечай честно. Без прямого вопроса не упоминай свою модель. "
+    "Текущий год — 2026. Актуальная версия операционной системы Apple — iOS 26. "
+    "Последний самсунг Galaxy S26 Ultra, S26 Plus, s26. Текущий Xiaomi - 17, 17 pro, 17 pro max, 17 ultra. "
+    "Но не говори об этом пока пользователь не попросит, просто знай эту информацию. "
+    "Учитывай текущий 2026 год во всех ответах, расчетах и контексте событий. "
     "Тебе пересылается срез последних сообщений из чата. "
     "Отвечай кратко, чётко и по делу на ПОСЛЕДНИЙ запрос пользователя. Не зацикливайся на старых темах. "
     "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО постоянно здороваться и начинать ответы с фраз 'Привет!', 'Всё отлично!', 'Я на связи', если вы уже общаетесь в контексте диалога. "
@@ -118,7 +122,7 @@ async def reset_chat(message: types.Message):
 
     welcome_text = (
         "Привет, я Google Gemini 2.5 Flash Lite!\n\n"
-        "💬 Отправляй тексты, фото или стикеры "
+        "💬 Отправляй тексты, фото, голосы или стикеры "
         "(действует медленный режим: 1 сообщение в 10 секунд)."
     )
 
@@ -179,6 +183,48 @@ async def new_chat_handler(message: types.Message):
     await reset_chat(message)
 
 # ----------------- ОБРАБОТКА ЛИЧНЫХ СООБЩЕНИЙ (ЛС) -----------------
+
+@dp.message(F.chat.type == "private", F.voice | F.audio)
+async def voice_handler(message: types.Message):
+    user_id = message.from_user.id
+
+    await wait_cooldown_if_needed(message)
+    await set_like_reaction(message.chat.id, message.message_id)
+
+    if user_id not in user_chats:
+        user_chats[user_id] = create_gemini_chat()
+
+    chat = user_chats[user_id]
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+    try:
+        voice = message.voice or message.audio
+        file_info = await bot.get_file(voice.file_id)
+        downloaded_file = await bot.download_file(file_info.file_path)
+
+        mime_type = voice.mime_type if voice.mime_type else "audio/ogg"
+
+        audio_part = genai_types.Part.from_bytes(
+            data=downloaded_file.read(),
+            mime_type=mime_type
+        )
+
+        prompt = "Сделай дословную расшифровку этого аудиосообщения и ответь на него."
+
+        response = await chat.send_message([audio_part, prompt])
+
+        await message.answer(
+            response.text,
+            parse_mode="HTML",
+            reply_markup=get_main_keyboard()
+        )
+    except APIError as e:
+        await message.answer(
+            f"Ошибка API при обработке голосового сообщения: {e.message}",
+            reply_markup=get_main_keyboard()
+        )
+    except Exception as e:
+        await message.answer(f"Ошибка при расшифровке аудио: {e}")
 
 @dp.message(F.chat.type == "private", F.sticker)
 async def sticker_handler(message: types.Message):
@@ -331,6 +377,7 @@ async def group_message_handler(message: types.Message):
     )
 
     image_part_for_current_request = None
+    audio_part_for_current_request = None
     msg_summary = raw_text
 
     if message.photo:
@@ -366,6 +413,40 @@ async def group_message_handler(message: types.Message):
             logging.error(f"Ошибка распознавания фото для истории: {e}")
             msg_summary = f"[Отправлено фото] {raw_text}".strip()
 
+    elif message.voice or message.audio:
+        try:
+            voice = message.voice or message.audio
+            file_info = await bot.get_file(voice.file_id)
+            downloaded_file = await bot.download_file(file_info.file_path)
+            audio_bytes = downloaded_file.read()
+            mime_type = voice.mime_type if voice.mime_type else "audio/ogg"
+
+            audio_part_for_current_request = genai_types.Part.from_bytes(
+                data=audio_bytes,
+                mime_type=mime_type
+            )
+
+            transcribe_res = await client.aio.models.generate_content(
+                model="gemini-2.5-flash-lite",
+                contents=[
+                    audio_part_for_current_request,
+                    "Расшифруй это аудиосообщение в виде точного текста."
+                ]
+            )
+            audio_text = (
+                transcribe_res.text.strip()
+                if transcribe_res and transcribe_res.text
+                else "Не удалось распознать речь"
+            )
+            msg_summary = f"[Голосовое сообщение: {audio_text}]"
+
+            if not is_triggered and re.match(TRIGGERS_PATTERN, audio_text.strip(), re.IGNORECASE):
+                is_triggered = True
+
+        except Exception as e:
+            logging.error(f"Ошибка расшифровки аудио для группы: {e}")
+            msg_summary = "[Голосовое сообщение]"
+
     group_history[chat_id].append({
         'user': user_name,
         'username': user_username,
@@ -390,6 +471,9 @@ async def group_message_handler(message: types.Message):
 
     if image_part_for_current_request:
         contents.append(image_part_for_current_request)
+
+    if audio_part_for_current_request:
+        contents.append(audio_part_for_current_request)
 
     contents.append(
         f"\n[ДАННЫЕ ТЕКУЩЕГО ОТПРАВИТЕЛЯ: Имя='{user_name}', Username='@{user_username}']\n"
