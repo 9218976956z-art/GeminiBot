@@ -159,10 +159,11 @@ async def handle_image_generation(message: types.Message, prompt_text: str):
 
     except Exception as e:
         logging.error(f"Ошибка генерации картинки: {e}")
+        error_text = f"❌ <b>Ошибка генерации:</b>\n<code>{e}</code>"
         try:
-            await status_msg.edit_text("❌ Не удалось сгенерировать изображение. Попробуй изменить запрос.")
+            await status_msg.edit_text(error_text, parse_mode="HTML")
         except Exception:
-            await message.reply("❌ Не удалось сгенерировать изображение.")
+            await message.reply(error_text, parse_mode="HTML")
         return False
 
 # ----------------- КОМАНДЫ (ТОЛЬКО В ЛС) -----------------
@@ -377,7 +378,7 @@ async def group_message_handler(message: types.Message):
         await handle_image_generation(message, clean_prompt)
         return
 
-    await bot.send_chat_action(chat_id=chat_id, action="typing")
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
     contents = ["Вот контекст последних сообщений из чата (от старых к новым):\n"]
 
