@@ -32,7 +32,61 @@ group_history = {}
 TRIGGERS_PATTERN = r'\b(ии|гемини|гем|gem|gemini)\b'
 GEN_KEYWORDS_PATTERN = r'\b(нарисуй|сгенерируй|создай картинку|нарисуй картинку|сделай фото|сгенерируй фото|сделай картинку)\b'
 
-SYSTEM_INSTRUCTION = (
+# --- СИСТЕМА ДОЛГОСРОЧНОЙ ПАМЯТИ (7 ДНЕЙ) ---
+MEMORY_FILE = "user_memory.json"
+MEMORY_LIFETIME_SECONDS = 7 * 24 * 3600  # 7 дней в секундах
+
+def load_memory() -> dict:
+    if not os.path.exists(MEMORY_FILE):
+        return {}
+    try:
+        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logging.error(f"Ошибка чтения файла памяти: {e}")
+        return {}
+
+def save_memory(data: dict):
+    try:
+        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.error(f"Ошибка записи файла памяти: {e}")
+
+def clean_notes(data: dict):
+    now = time.time()
+    for uid in list(data.keys()):
+        valid_notes = [
+            note for note in data[uid]
+            if now - note.get("timestamp", 0) < MEMORY_LIFETIME_SECONDS
+        ]
+        if valid_notes:
+            data[uid] = valid_notes
+        else:
+            del data[uid]
+
+def add_user_note(user_id: int, note_text: str):
+    data = load_memory()
+    uid_str = str(user_id)
+    if uid_str not in data:
+        data[uid_str] = []
+    
+    clean_notes(data)
+    data[uid_str].append({
+        "text": note_text,
+        "timestamp": time.time()
+    })
+    save_memory(data)
+
+def get_user_notes(user_id: int) -> list:
+    data = load_memory()
+    clean_notes(data)
+    save_memory(data)
+    uid_str = str(user_id)
+    return [item["text"] for item in data.get(uid_str, [])]
+
+# --- СИСТЕМНЫЕ ИНСТРУКЦИИ ---
+BASE_SYSTEM_INSTRUCTION = (
     "Ты — умный, актуальный и дружелюбный ассистент Gemini. "
     "Твоя модель — Gemini 3.5 Flash Lite. На прямой вопрос о том, какая ты модель, отвечай честно. Без прямого вопроса не упоминай свою модель. "
     "Текущий год — 2026. Актуальная версия операционной системы Apple — iOS 26. "
@@ -76,11 +130,18 @@ def get_main_keyboard():
         resize_keyboard=True
     )
 
-def create_gemini_chat():
+def create_gemini_chat(user_id: int):
+    notes = get_user_notes(user_id)
+    system_inst = BASE_SYSTEM_INSTRUCTION
+    
+    if notes:
+        notes_str = "\n".join([f"- {n}" for n in notes])
+        system_inst += f"\n\nВАЖНО: Ниже приведены заметки/память, которые пользователь просил запомнить (они хранятся 7 дней):\n{notes_str}"
+
     return client.aio.chats.create(
         model="gemini-3.5-flash-lite",
         config=genai_types.GenerateContentConfig(
-            system_instruction=SYSTEM_INSTRUCTION
+            system_instruction=system_inst
         )
     )
 
@@ -118,7 +179,7 @@ async def set_like_reaction(chat_id: int, message_id: int):
 
 async def reset_chat(message: types.Message):
     user_id = message.from_user.id
-    user_chats[user_id] = create_gemini_chat()
+    user_chats[user_id] = create_gemini_chat(user_id)
 
     welcome_text = (
         "Привет, я Google Gemini 3.5 Flash Lite!\n\n"
@@ -192,7 +253,7 @@ async def voice_handler(message: types.Message):
     await set_like_reaction(message.chat.id, message.message_id)
 
     if user_id not in user_chats:
-        user_chats[user_id] = create_gemini_chat()
+        user_chats[user_id] = create_gemini_chat(user_id)
 
     chat = user_chats[user_id]
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -234,7 +295,7 @@ async def sticker_handler(message: types.Message):
     await set_like_reaction(message.chat.id, message.message_id)
 
     if user_id not in user_chats:
-        user_chats[user_id] = create_gemini_chat()
+        user_chats[user_id] = create_gemini_chat(user_id)
 
     chat = user_chats[user_id]
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -268,7 +329,7 @@ async def photo_handler(message: types.Message):
     await set_like_reaction(message.chat.id, message.message_id)
 
     if user_id not in user_chats:
-        user_chats[user_id] = create_gemini_chat()
+        user_chats[user_id] = create_gemini_chat(user_id)
 
     chat = user_chats[user_id]
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -303,18 +364,35 @@ async def photo_handler(message: types.Message):
 @dp.message(F.chat.type == "private", F.text)
 async def chat_handler(message: types.Message):
     user_id = message.from_user.id
+    raw_text = message.text.strip()
 
     await wait_cooldown_if_needed(message)
     await set_like_reaction(message.chat.id, message.message_id)
 
-    raw_text = message.text.strip()
+    # --- ПРОВЕРКА ЗАПРОСА НА ЗАПОМИНАНИЕ ---
+    mem_match = re.search(r'\b(запомни|сохрани|запиши)\b\s*(.*)', raw_text, re.IGNORECASE)
+    if mem_match:
+        note_text = mem_match.group(2).strip()
+        
+        if not note_text:
+            note_text = raw_text
+        
+        add_user_note(user_id, note_text)
+        user_chats[user_id] = create_gemini_chat(user_id)
+        
+        await message.answer(
+            "📌 <b>Запомнил!</b> Сохранил эту информацию на 7 дней.",
+            parse_mode="HTML",
+            reply_markup=get_main_keyboard()
+        )
+        return
 
     if re.search(GEN_KEYWORDS_PATTERN, raw_text, re.IGNORECASE):
         await handle_image_generation(message, raw_text)
         return
 
     if user_id not in user_chats:
-        user_chats[user_id] = create_gemini_chat()
+        user_chats[user_id] = create_gemini_chat(user_id)
 
     chat = user_chats[user_id]
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
@@ -511,4 +589,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
